@@ -1,4 +1,3 @@
-import os
 import re
 from datetime import date, timedelta
 
@@ -13,7 +12,7 @@ import streamlit as st
 # ==================================================
 
 st.set_page_config(
-    page_title="학교 급식 비교 서비스",
+    page_title="여러 학교 급식 비교",
     page_icon="🍱",
     layout="wide",
 )
@@ -28,63 +27,55 @@ FOODS = [
         "name": "제육볶음",
         "category": "육류",
         "emoji": "🥩",
-        "image": "images/jeyuk.jpg",
     },
     {
         "name": "닭갈비",
         "category": "육류",
         "emoji": "🍗",
-        "image": "images/dakgalbi.jpg",
     },
     {
         "name": "돈가스",
         "category": "육류",
         "emoji": "🍖",
-        "image": "images/pork_cutlet.jpg",
     },
     {
         "name": "샐러드",
         "category": "채식",
         "emoji": "🥗",
-        "image": "images/salad.jpg",
     },
     {
         "name": "비빔밥",
         "category": "채식",
         "emoji": "🍚",
-        "image": "images/bibimbap.jpg",
     },
     {
         "name": "생선구이",
         "category": "해산물",
         "emoji": "🐟",
-        "image": "images/fish.jpg",
     },
     {
         "name": "잔치국수",
         "category": "면류",
         "emoji": "🍜",
-        "image": "images/noodles.jpg",
     },
     {
         "name": "과일",
         "category": "후식",
         "emoji": "🍎",
-        "image": "images/fruit.jpg",
     },
 ]
 
 
 # ==================================================
-# 키워드
+# 메뉴 분석 키워드
 # ==================================================
 
 MEAT_KEYWORDS = [
     "돼지", "돈육", "제육", "삼겹", "목살",
     "소고기", "쇠고기", "불고기", "갈비",
-    "닭", "치킨", "닭갈비", "오리",
-    "햄", "소시지", "베이컨", "고기",
-    "돈가스", "돈까스", "스테이크",
+    "닭", "치킨", "닭갈비", "닭볶음",
+    "오리", "햄", "소시지", "베이컨",
+    "고기", "스테이크", "돈가스", "돈까스",
 ]
 
 SEAFOOD_KEYWORDS = [
@@ -95,9 +86,10 @@ SEAFOOD_KEYWORDS = [
 ]
 
 VEGETARIAN_KEYWORDS = [
-    "두부", "콩", "버섯", "채소", "나물",
-    "샐러드", "야채", "감자", "고구마",
-    "호박", "김치", "비빔밥", "시금치",
+    "두부", "콩", "버섯", "채소",
+    "나물", "샐러드", "야채",
+    "감자", "고구마", "호박",
+    "김치", "비빔밥", "시금치",
     "부추", "가지", "연근",
 ]
 
@@ -121,10 +113,13 @@ if "selected_foods" not in st.session_state:
     st.session_state.selected_foods = []
 
 if "school_results" not in st.session_state:
-    st.session_state.school_results = None
+    st.session_state.school_results = pd.DataFrame()
 
 if "comparison_results" not in st.session_state:
     st.session_state.comparison_results = None
+
+if "meal_data_by_school" not in st.session_state:
+    st.session_state.meal_data_by_school = {}
 
 
 # ==================================================
@@ -139,17 +134,13 @@ def get_api_key():
         return ""
 
 
-def image_exists(path):
-    """이미지 파일이 존재하는지 확인합니다."""
-    return os.path.exists(path)
-
-
 def contains_keyword(text, keywords):
+    """문장에 키워드가 포함되어 있는지 확인합니다."""
     return any(keyword in text for keyword in keywords)
 
 
 def clean_menu_text(text):
-    """급식 문자열의 HTML 태그를 정리합니다."""
+    """NEIS 급식 문자열의 HTML 줄바꿈을 정리합니다."""
     if not text:
         return ""
 
@@ -162,12 +153,14 @@ def clean_menu_text(text):
 
 
 def split_menus(text):
-    """급식 문자열을 개별 메뉴로 나눕니다."""
+    """급식 문자열을 메뉴별로 나눕니다."""
     text = clean_menu_text(text)
     menus = []
 
     for menu in text.split("\n"):
-        menu = re.sub(r"\([^)]*\)", "", menu).strip()
+        # 메뉴에 붙어 있는 알레르기 번호 제거
+        menu = re.sub(r"\([^)]*\)", "", menu)
+        menu = menu.strip()
 
         if menu:
             menus.append(menu)
@@ -195,8 +188,15 @@ def analyze_meal(menu_text):
         for menu in menus
     )
 
-    is_spicy = contains_keyword(joined_text, SPICY_KEYWORDS)
-    has_dessert = contains_keyword(joined_text, DESSERT_KEYWORDS)
+    is_spicy = contains_keyword(
+        joined_text,
+        SPICY_KEYWORDS,
+    )
+
+    has_dessert = contains_keyword(
+        joined_text,
+        DESSERT_KEYWORDS,
+    )
 
     if meat_count >= vegetarian_count + 2:
         category = "육류 중심"
@@ -215,8 +215,8 @@ def analyze_meal(menu_text):
     }
 
 
-def calculate_user_preferences():
-    """사용자가 선택한 음식으로 취향 점수를 계산합니다."""
+def get_user_preferences():
+    """선택한 음식으로 사용자 취향 점수를 계산합니다."""
     scores = {
         "육류": 0,
         "채식": 0,
@@ -233,7 +233,10 @@ def calculate_user_preferences():
 
 
 def calculate_match_score(preferences, summary):
-    """사용자 취향과 학교 급식 특징을 비교합니다."""
+    """
+    사용자 취향과 학교 급식 특성을 비교합니다.
+    결과는 참고용 적합도 점수입니다.
+    """
     total = sum(preferences.values())
 
     if total == 0:
@@ -247,26 +250,31 @@ def calculate_match_score(preferences, summary):
     school_vegetarian = summary["채식 친화 비율"]
     school_seafood = summary["해산물 포함 비율"]
 
-    meat_match = max(0, 30 - abs(user_meat - school_meat) * 0.3)
-    vegetarian_match = max(
+    meat_score = max(
+        0,
+        30 - abs(user_meat - school_meat) * 0.3,
+    )
+
+    vegetarian_score = max(
         0,
         25 - abs(user_vegetarian - school_vegetarian) * 0.25,
     )
-    seafood_match = max(
+
+    seafood_score = max(
         0,
         20 - abs(user_seafood - school_seafood) * 0.2,
     )
 
-    balanced_bonus = summary["균형형 비율"] * 0.25
+    balanced_score = summary["균형형 비율"] * 0.25
 
-    score = (
-        meat_match
-        + vegetarian_match
-        + seafood_match
-        + balanced_bonus
+    result = (
+        meat_score
+        + vegetarian_score
+        + seafood_score
+        + balanced_score
     )
 
-    return round(min(score, 100), 1)
+    return round(min(result, 100), 1)
 
 
 # ==================================================
@@ -294,29 +302,31 @@ def search_schools(api_key, school_name, office_code=""):
         params=params,
         timeout=15,
     )
-    response.raise_for_status()
 
+    response.raise_for_status()
     data = response.json()
 
     if "schoolInfo" not in data:
         result = data.get("RESULT", {})
-        raise ValueError(
-            result.get("MESSAGE", "학교를 찾을 수 없습니다.")
+        message = result.get(
+            "MESSAGE",
+            "검색된 학교가 없습니다.",
         )
+        raise ValueError(message)
 
     school_info = data["schoolInfo"]
 
     if len(school_info) < 2:
-        raise ValueError("학교 검색 결과가 없습니다.")
+        raise ValueError("검색된 학교가 없습니다.")
 
     rows = school_info[1].get("row", [])
 
     if not rows:
-        raise ValueError("학교 검색 결과가 없습니다.")
+        raise ValueError("검색된 학교가 없습니다.")
 
     result = pd.DataFrame(rows)
 
-    columns = [
+    required_columns = [
         "SCHUL_NM",
         "ATPT_OFCDC_SC_CODE",
         "ATPT_OFCDC_SC_NM",
@@ -325,11 +335,11 @@ def search_schools(api_key, school_name, office_code=""):
         "SCHUL_KND_SC_NM",
     ]
 
-    for column in columns:
+    for column in required_columns:
         if column not in result.columns:
             result[column] = ""
 
-    result = result[columns]
+    result = result[required_columns].copy()
 
     result = result.rename(
         columns={
@@ -357,7 +367,7 @@ def fetch_meals(
     start_date,
     end_date,
 ):
-    """NEIS 급식 API로 급식 데이터를 가져옵니다."""
+    """NEIS 급식 API로 학교 급식을 조회합니다."""
     url = "https://open.neis.go.kr/hub/mealServiceDietInfo"
 
     params = {
@@ -376,18 +386,17 @@ def fetch_meals(
         params=params,
         timeout=15,
     )
-    response.raise_for_status()
 
+    response.raise_for_status()
     data = response.json()
 
     if "mealServiceDietInfo" not in data:
         result = data.get("RESULT", {})
-        raise ValueError(
-            result.get(
-                "MESSAGE",
-                "급식 데이터를 찾을 수 없습니다.",
-            )
+        message = result.get(
+            "MESSAGE",
+            "급식 데이터를 찾을 수 없습니다.",
         )
+        raise ValueError(message)
 
     meal_info = data["mealServiceDietInfo"]
 
@@ -401,13 +410,15 @@ def fetch_meals(
 
     df = pd.DataFrame(rows)
 
-    for column in [
+    required_columns = [
         "SCHUL_NM",
         "MMEAL_SC_NM",
         "MLSV_YMD",
         "DDISH_NM",
         "CAL_INFO",
-    ]:
+    ]
+
+    for column in required_columns:
         if column not in df.columns:
             df[column] = ""
 
@@ -415,27 +426,27 @@ def fetch_meals(
     df["분석"] = df["DDISH_NM"].apply(analyze_meal)
 
     df["분류"] = df["분석"].apply(
-        lambda x: x["category"]
+        lambda value: value["category"]
     )
 
     df["육류수"] = df["분석"].apply(
-        lambda x: x["meat_count"]
+        lambda value: value["meat_count"]
     )
 
     df["해산물수"] = df["분석"].apply(
-        lambda x: x["seafood_count"]
+        lambda value: value["seafood_count"]
     )
 
     df["채식수"] = df["분석"].apply(
-        lambda x: x["vegetarian_count"]
+        lambda value: value["vegetarian_count"]
     )
 
     df["매운메뉴"] = df["분석"].apply(
-        lambda x: x["is_spicy"]
+        lambda value: value["is_spicy"]
     )
 
     df["후식포함"] = df["분석"].apply(
-        lambda x: x["has_dessert"]
+        lambda value: value["has_dessert"]
     )
 
     df["칼로리"] = (
@@ -458,9 +469,16 @@ def fetch_meals(
     return df
 
 
+# ==================================================
+# 학교별 통계
+# ==================================================
+
 def summarize_meals(df):
-    """한 학교의 급식 통계를 계산합니다."""
+    """학교 급식 데이터를 요약합니다."""
     total = len(df)
+
+    if total == 0:
+        return {}
 
     category_counts = df["분류"].value_counts()
 
@@ -502,6 +520,9 @@ def summarize_meals(df):
 
     average_calorie = df["칼로리"].mean()
 
+    if pd.isna(average_calorie):
+        average_calorie = 0
+
     return {
         "식단 수": total,
         "육류 중심 비율": round(meat_ratio, 1),
@@ -510,41 +531,34 @@ def summarize_meals(df):
         "해산물 포함 비율": round(seafood_ratio, 1),
         "매운 메뉴 비율": round(spicy_ratio, 1),
         "후식 포함 비율": round(dessert_ratio, 1),
-        "평균 칼로리": (
-            round(average_calorie, 1)
-            if not pd.isna(average_calorie)
-            else 0
-        ),
+        "평균 칼로리": round(average_calorie, 1),
     }
 
 
 # ==================================================
-# 기본 정보 및 사이드바
+# 사이드바
 # ==================================================
 
 api_key = get_api_key()
 
-st.sidebar.title("🍱 급식 비교 설정")
+st.sidebar.title("⚙️ 조회 설정")
 
 if not api_key:
-    st.sidebar.error("NEIS_API_KEY가 없습니다.")
+    st.sidebar.error("NEIS_API_KEY가 설정되지 않았습니다.")
     st.sidebar.code(
-        '[secrets.toml]\n\n'
         'NEIS_API_KEY = "인증키"',
         language="toml",
     )
 
-st.sidebar.markdown("### 급식 조회 기간")
-
 today = date.today()
 
 start_date = st.sidebar.date_input(
-    "시작일",
+    "급식 조회 시작일",
     value=today.replace(day=1),
 )
 
 end_date = st.sidebar.date_input(
-    "종료일",
+    "급식 조회 종료일",
     value=today + timedelta(days=30),
 )
 
@@ -556,46 +570,40 @@ end_date = st.sidebar.date_input(
 st.title("🍱 여러 학교 급식 비교 서비스")
 
 st.write(
-    "좋아하는 음식으로 취향을 분석한 뒤, "
-    "여러 학교의 급식을 비교해 보세요."
+    "좋아하는 음식을 선택하고 여러 학교의 급식을 비교해 보세요."
 )
 
 st.info(
-    "급식 평가는 메뉴명에 포함된 키워드를 바탕으로 계산한 "
-    "참고용 분석입니다."
+    "급식 유형은 메뉴명 키워드를 기준으로 분류한 참고용 결과입니다."
 )
 
 
 # ==================================================
-# 1단계: 음식 선택
+# 1단계: 음식 취향 선택
 # ==================================================
 
 st.header("1️⃣ 좋아하는 음식 선택")
 
 st.write(
-    "좋아하는 음식에 체크하세요. 선택한 결과는 학교 추천 점수에 사용됩니다."
+    "좋아하는 음식에 체크하세요."
 )
 
 food_columns = st.columns(4)
 
 for index, food in enumerate(FOODS):
     with food_columns[index % 4]:
-        if image_exists(food["image"]):
-            st.image(
-                food["image"],
-                use_container_width=True,
-            )
-        else:
-            st.markdown(
-                f"<div style='font-size:70px; "
-                f"text-align:center'>{food['emoji']}</div>",
-                unsafe_allow_html=True,
-            )
+        st.markdown(
+            f"<div style='font-size:70px; text-align:center;'>"
+            f"{food['emoji']}</div>",
+            unsafe_allow_html=True,
+        )
 
         checked = st.checkbox(
             f"{food['name']} ({food['category']})",
-            value=food["name"]
-            in st.session_state.selected_foods,
+            value=(
+                food["name"]
+                in st.session_state.selected_foods
+            ),
             key=f"food_{food['name']}",
         )
 
@@ -604,19 +612,20 @@ for index, food in enumerate(FOODS):
             and food["name"]
             not in st.session_state.selected_foods
         ):
-            st.session_state.selected_foods.append(food["name"])
+            st.session_state.selected_foods.append(
+                food["name"]
+            )
 
         if (
             not checked
             and food["name"]
             in st.session_state.selected_foods
         ):
-            st.session_state.selected_foods.remove(food["name"])
+            st.session_state.selected_foods.remove(
+                food["name"]
+            )
 
-
-preferences = calculate_user_preferences()
-
-st.subheader("나의 취향")
+preferences = get_user_preferences()
 
 preference_df = pd.DataFrame(
     {
@@ -625,25 +634,38 @@ preference_df = pd.DataFrame(
     }
 )
 
-fig = px.bar(
-    preference_df,
-    x="음식 유형",
-    y="선택 수",
-    text_auto=True,
-    title="음식 유형별 선호도",
-)
+st.subheader("나의 음식 취향")
 
-st.plotly_chart(
-    fig,
-    use_container_width=True,
-)
+if sum(preferences.values()) == 0:
+    st.warning("음식을 하나 이상 선택하세요.")
+else:
+    st.write(
+        "선택한 음식 유형을 기준으로 학교 급식과의 적합도를 계산합니다."
+    )
+
+    preference_chart = px.bar(
+        preference_df,
+        x="음식 유형",
+        y="선택 수",
+        text_auto=True,
+        title="음식 유형별 선호도",
+    )
+
+    st.plotly_chart(
+        preference_chart,
+        use_container_width=True,
+    )
 
 
 # ==================================================
-# 2단계: 학교 검색
+# 2단계: 학교 검색 및 누적
 # ==================================================
 
 st.header("2️⃣ 비교할 학교 검색")
+
+st.write(
+    "학교를 검색할 때마다 비교 목록에 추가됩니다."
+)
 
 search_col1, search_col2, search_col3 = st.columns(
     [2, 1, 1]
@@ -652,21 +674,22 @@ search_col1, search_col2, search_col3 = st.columns(
 with search_col1:
     school_search_name = st.text_input(
         "학교 이름",
-        placeholder="예: 고등학교, 당곡고등학교",
+        placeholder="예: 당곡고등학교",
     )
 
 with search_col2:
     office_code = st.text_input(
         "교육청 코드 선택사항",
         value="B10",
-        help="서울교육청은 B10입니다.",
+        help="서울교육청은 B10입니다. 전국 검색은 비워두세요.",
     )
 
 with search_col3:
     st.write("")
     st.write("")
+
     search_button = st.button(
-        "학교 검색",
+        "학교 검색 후 추가",
         type="primary",
         use_container_width=True,
     )
@@ -682,62 +705,102 @@ if search_button:
     else:
         try:
             with st.spinner("학교를 검색하는 중입니다..."):
-                st.session_state.school_results = search_schools(
-                    api_key,
-                    school_search_name.strip(),
-                    office_code.strip(),
+                new_results = search_schools(
+                    api_key=api_key,
+                    school_name=school_search_name.strip(),
+                    office_code=office_code.strip(),
                 )
 
-            st.success(
-                f"{len(st.session_state.school_results)}개 학교를 찾았습니다."
+            old_results = st.session_state.school_results
+
+            if old_results.empty:
+                combined_results = new_results
+            else:
+                combined_results = pd.concat(
+                    [
+                        old_results,
+                        new_results,
+                    ],
+                    ignore_index=True,
+                )
+
+            # 학교 코드가 같은 학교는 한 번만 저장
+            combined_results = (
+                combined_results
+                .drop_duplicates(subset=["학교코드"])
+                .reset_index(drop=True)
             )
+
+            st.session_state.school_results = combined_results
+
+            st.success(
+                f"현재 비교 목록에 "
+                f"{len(combined_results)}개 학교가 있습니다."
+            )
+
+        except requests.exceptions.RequestException as error:
+            st.error(f"학교 검색 요청 오류: {error}")
+
+        except ValueError as error:
+            st.warning(str(error))
 
         except Exception as error:
             st.error(f"학교 검색 오류: {error}")
 
 
 # ==================================================
-# 3단계: 여러 학교 선택
+# 3단계: 비교 학교 선택
 # ==================================================
 
 school_results = st.session_state.school_results
 
-if school_results is not None:
+if not school_results.empty:
     st.header("3️⃣ 비교할 학교 선택")
 
     st.write(
-        "최대 5개 학교까지 선택할 수 있습니다."
+        "비교 목록에서 최대 5개 학교를 선택하세요."
     )
 
-    school_options = []
+    clear_button = st.button(
+        "비교 목록 초기화",
+        use_container_width=True,
+    )
+
+    if clear_button:
+        st.session_state.school_results = pd.DataFrame()
+        st.session_state.comparison_results = None
+        st.session_state.meal_data_by_school = {}
+        st.rerun()
+
+    school_options = {}
 
     for index, row in school_results.iterrows():
         label = (
-            f"{index} | "
             f"{row['학교명']} | "
             f"{row['교육청명']} | "
             f"{row['주소']}"
         )
-        school_options.append(label)
+        school_options[label] = index
 
-    selected_options = st.multiselect(
+    selected_labels = st.multiselect(
         "비교할 학교를 선택하세요.",
-        options=school_options,
+        options=list(school_options.keys()),
         max_selections=5,
     )
 
-    selected_indexes = []
-
-    for option in selected_options:
-        index = int(option.split(" | ")[0])
-        selected_indexes.append(index)
+    selected_indexes = [
+        school_options[label]
+        for label in selected_labels
+    ]
 
     selected_schools = school_results.loc[
         selected_indexes
     ].copy()
 
     if selected_schools.empty:
-        st.info("비교할 학교를 하나 이상 선택하세요.")
+        st.info(
+            "비교할 학교를 하나 이상 선택하세요."
+        )
 
     else:
         st.dataframe(
@@ -760,10 +823,16 @@ if school_results is not None:
         )
 
         if compare_button:
-            if start_date > end_date:
+            if sum(preferences.values()) == 0:
+                st.warning(
+                    "먼저 좋아하는 음식을 하나 이상 선택하세요."
+                )
+
+            elif start_date > end_date:
                 st.error(
                     "시작일은 종료일보다 빠르거나 같아야 합니다."
                 )
+
             else:
                 comparison_results = []
                 meal_data_by_school = {}
@@ -792,12 +861,15 @@ if school_results is not None:
 
                         summary["학교명"] = school["학교명"]
                         summary["주소"] = school["주소"]
-                        summary["취향 적합도"] = calculate_match_score(
-                            preferences,
-                            summary,
+                        summary["취향 적합도"] = (
+                            calculate_match_score(
+                                preferences,
+                                summary,
+                            )
                         )
 
                         comparison_results.append(summary)
+
                         meal_data_by_school[
                             school["학교명"]
                         ] = meals
@@ -819,9 +891,13 @@ if school_results is not None:
                     meal_data_by_school
                 )
 
+                st.success(
+                    "선택한 학교의 급식 비교가 완료되었습니다."
+                )
+
 
 # ==================================================
-# 4단계: 비교 결과
+# 4단계: 결과 출력
 # ==================================================
 
 results = st.session_state.comparison_results
@@ -832,30 +908,18 @@ if results:
     result_df = pd.DataFrame(results)
 
     result_df = result_df.sort_values(
-        "취향 적합도",
+        by="취향 적합도",
         ascending=False,
-    )
+    ).reset_index(drop=True)
 
     best_school = result_df.iloc[0]
 
     st.success(
-        f"🎉 현재 선택한 학교 중 가장 잘 맞는 학교는 "
+        f"현재 선택한 학교 중 가장 잘 맞는 학교는 "
         f"**{best_school['학교명']}**입니다. "
         f"취향 적합도는 **{best_school['취향 적합도']}점**입니다."
     )
 
-    display_columns = [
-        "学校名",
-        "식단 수",
-        "육류 중심 비율",
-        "채식 친화 비율",
-        "균형형 비율",
-        "해산물 포함 비율",
-        "평균 칼로리",
-        "취향 적합도",
-    ]
-
-    # 학교명 컬럼명을 잘못 입력하지 않도록 실제 컬럼을 구성합니다.
     display_columns = [
         "학교명",
         "식단 수",
@@ -863,6 +927,7 @@ if results:
         "채식 친화 비율",
         "균형형 비율",
         "해산물 포함 비율",
+        "매운 메뉴 비율",
         "평균 칼로리",
         "취향 적합도",
     ]
@@ -908,15 +973,17 @@ if results:
         use_container_width=True,
     )
 
-    st.subheader("학교별 상세 특징")
+    st.subheader("학교별 상세 급식")
 
     for _, row in result_df.iterrows():
-        with st.expander(
-            f"{row['학교명']} 상세 보기"
-        ):
-            detail_col1, detail_col2, detail_col3 = st.columns(3)
+        school_name = row["학교명"]
 
-            with detail_col1:
+        with st.expander(
+            f"{school_name} 상세 보기"
+        ):
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
                 st.metric(
                     "육류 중심",
                     f"{row['육류 중심 비율']}%",
@@ -926,7 +993,7 @@ if results:
                     f"{row['채식 친화 비율']}%",
                 )
 
-            with detail_col2:
+            with col2:
                 st.metric(
                     "해산물 포함",
                     f"{row['해산물 포함 비율']}%",
@@ -936,7 +1003,7 @@ if results:
                     f"{row['매운 메뉴 비율']}%",
                 )
 
-            with detail_col3:
+            with col3:
                 st.metric(
                     "후식 포함",
                     f"{row['후식 포함 비율']}%",
@@ -946,9 +1013,9 @@ if results:
                     f"{row['평균 칼로리']}kcal",
                 )
 
-            school_name = row["학교명"]
-            meal_data = st.session_state.meal_data_by_school.get(
-                school_name
+            meal_data = (
+                st.session_state.meal_data_by_school
+                .get(school_name)
             )
 
             if meal_data is not None:
@@ -988,7 +1055,7 @@ if results:
 st.divider()
 
 st.caption(
-    "이 서비스의 결과는 메뉴명 키워드를 기반으로 한 "
-    "참고용 분석입니다. 실제 원재료, 알레르기 정보, "
-    "조리 방법은 학교 공식 급식 정보를 확인하세요."
+    "주의: 이 서비스는 메뉴명과 칼로리 정보를 기반으로 한 "
+    "참고용 분석입니다. 실제 재료, 알레르기 정보, 조리 방법은 "
+    "학교의 공식 급식 안내를 확인하세요."
 )
